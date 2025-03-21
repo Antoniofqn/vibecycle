@@ -45,14 +45,11 @@ scene.add(motorcycle);
 
 
 // Trail variables
-const trailMaterial = new THREE.MeshStandardMaterial({
-  color: playerColor.clone().lerp(new THREE.Color(0xffffff), 0.5),
-  emissive: playerColor,
-  emissiveIntensity: 0.8,
-});
+const trailMaterial = new THREE.MeshBasicMaterial({ color: playerColor });
 
 const trailSegments = [];
 const maxTrailLength = 100;
+const trailPositions = [];
 
 
 // Movement vars
@@ -94,30 +91,31 @@ function addTrailSegment(fromX, fromZ, toX, toZ) {
 
 // Collision Detection
 function checkCollision(x, z) {
-  // Boundary collision
+  // Check boundaries
   if (Math.abs(x) > arenaSize || Math.abs(z) > arenaSize) {
     console.log("Collision with Arena Boundary!");
     return true;
   }
 
-  // Trail collision (check exact positions occupied by segments)
-  for (const segment of trailSegments) {
-    const segmentPos = segment.position;
-    const segLength = segment.geometry.parameters.depth / 2;
-
-    const dir = new THREE.Vector3();
-    segment.getWorldDirection(dir);
-
-    const start = segmentPos.clone().add(dir.clone().multiplyScalar(-segLength));
-    const end = segmentPos.clone().add(dir.clone().multiplyScalar(segLength));
-
-    // Check if next position matches any segment endpoints or is on segment
-    if ((Math.abs(start.x - x) < 0.1 && Math.abs(start.z - z) < 0.1) ||
-        (Math.abs(end.x - x) < 0.1 && Math.abs(end.z - z) < 0.1)) {
-      console.log("Collision with Trail!");
+  // Check your own trail positions clearly
+  for (const pos of trailPositions) {
+    if (pos.x === x && pos.z === z) {
+      console.log("Collision with Your Trail!");
       return true;
     }
   }
+
+  // Check ALL other players' trail positions clearly
+  for (const id in otherPlayers) {
+    const player = otherPlayers[id];
+    for (const pos of player.trailPositions) {
+      if (pos.x === x && pos.z === z) {
+        console.log("Collision with Another Player's Trail!");
+        return true;
+      }
+    }
+  }
+
   return false;
 }
 
@@ -191,6 +189,7 @@ function updateMotorcycle() {
 
     socket.emit('playerCollision', {
       position: motorcycle.position,
+      trail: trailPositions,
     });
 
     return;
@@ -208,14 +207,14 @@ function updateMotorcycle() {
   motorcycle.position.z = Math.round(motorcycle.position.z);
 
   addTrailSegment(prevX, prevZ, motorcycle.position.x, motorcycle.position.z);
+  trailPositions.push({ x: motorcycle.position.x, z: motorcycle.position.z });
+  if (trailPositions.length > 100) { // clear older points if necessary
+    trailPositions.shift();
+  }
 
   socket.emit('playerMove', {
     position: motorcycle.position,
-    trail: trailSegments.map(segment => ({
-      x: segment.position.x,
-      y: segment.position.y,
-      z: segment.position.z
-    }))
+    trail: trailPositions,
   });
 }
 
@@ -259,7 +258,6 @@ socket.on('updatePlayers', (players) => {
 
     const data = players[id];
 
-    // Add new players
     if (!otherPlayers[id]) {
       const otherMotorcycle = new THREE.Mesh(
         new THREE.BoxGeometry(0.5, 0.5, 1),
@@ -271,18 +269,15 @@ socket.on('updatePlayers', (players) => {
         motorcycle: otherMotorcycle,
         trailSegments: [],
         color: data.color,
+        trailPositions: []
       };
     }
 
-    // Update other players' positions
-    otherPlayers[id].motorcycle.position.set(
-      data.position.x,
-      data.position.y,
-      data.position.z
-    );
+    const player = otherPlayers[id];
+    player.motorcycle.position.set(data.position.x, data.position.y, data.position.z);
+    player.trailPositions = data.trail; // clearly store positions
 
-    // Update trails visually for other players
-    updateOtherPlayerTrails(id, data.trail);
+    updateOtherPlayerTrails(player);
   }
 
   // Remove disconnected players
@@ -294,26 +289,31 @@ socket.on('updatePlayers', (players) => {
 });
 
 // Helper functions
-function updateOtherPlayerTrails(id, trailPositions) {
-  const player = otherPlayers[id];
-  player.trailSegments.forEach(segment => scene.remove(segment));
+function updateOtherPlayerTrails(player) {
+  player.trailSegments.forEach(seg => scene.remove(seg));
   player.trailSegments = [];
 
-  for (let i = 1; i < trailPositions.length; i++) {
-    const from = trailPositions[i - 1];
-    const to = trailPositions[i];
+  const positions = player.trailPositions;
 
-    const geometry = new THREE.BoxGeometry(0.2, 0.5, 1);
+  for (let i = 1; i < positions.length; i++) {
+    const from = positions[i - 1];
+    const to = positions[i];
+
+    const distance = Math.sqrt((to.x - from.x) ** 2 + (to.z - from.z) ** 2);
+    const geometry = new THREE.BoxGeometry(0.2, 0.5, distance);
+
     const segment = new THREE.Mesh(
       geometry,
       new THREE.MeshStandardMaterial({ color: player.color })
     );
-    segment.position.set((from.x + to.x)/2, 0.25, (from.z + to.z)/2);
+
+    segment.position.set((from.x + to.x) / 2, 0.25, (from.z + to.z) / 2);
     segment.lookAt(new THREE.Vector3(to.x, 0.25, to.z));
     scene.add(segment);
     player.trailSegments.push(segment);
   }
 }
+
 
 function removeOtherPlayer(id) {
   const player = otherPlayers[id];

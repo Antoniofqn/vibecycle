@@ -3,6 +3,8 @@ const app = express();
 const server = require('http').createServer(app);
 const io = require('socket.io')(server);
 
+const MAX_TRAIL_LENGTH = 20;
+
 // Serve static files from 'public'
 app.use(express.static('public'));
 
@@ -20,7 +22,12 @@ io.on('connection', (socket) => {
   socket.on('playerMove', (playerData) => {
     if (players[socket.id]) {
       players[socket.id].position = playerData.position;
-      players[socket.id].trail = playerData.trail;
+      players[socket.id].trail.push(playerData.position);
+
+      if (players[socket.id].trail.length > MAX_TRAIL_LENGTH) {
+        players[socket.id].trail.shift(); // remove oldest segment
+      }
+
       io.emit('updatePlayers', players);
     }
   });
