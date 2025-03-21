@@ -241,7 +241,10 @@ function animate() {
 }
 
 // Socket
-const socket = io({ path: '/api/socket.io' });
+const socket = io({
+  path: '/api/socket.io',
+  transports: ['pooling']
+ });
 
 // Initialize player on connect
 socket.emit('newPlayer', {
