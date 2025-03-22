@@ -116,6 +116,14 @@ class Player {
 
     // Add to trail group
     this.trailSegments.add(segment);
+
+    const MAX_TRAIL_SEGMENTS = 50; // Match server's MAX_TRAIL_LENGTH
+    if (this.trailSegments.children.length > MAX_TRAIL_SEGMENTS) {
+      const oldestSegment = this.trailSegments.children[0];
+      this.trailSegments.remove(oldestSegment);
+      oldestSegment.geometry.dispose();
+      oldestSegment.material.dispose();
+    }
   }
 
   clearTrail() {
@@ -127,7 +135,7 @@ class Player {
     }
   }
 
-  updateCamera() {
+  updateCamera(instant = false) {
     const direction = this.motorcycle.rotation.y;
     const targetPos = new THREE.Vector3(
       this.motorcycle.position.x - Math.sin(direction) * 10,
@@ -136,8 +144,64 @@ class Player {
     );
 
     // Smooth camera movement
-    camera.position.lerp(targetPos, 0.1);
+    if (instant) {
+      // Instantly move camera to proper position
+      camera.position.copy(targetPos);
+    } else {
+      // Smooth camera movement
+      camera.position.lerp(targetPos, 0.1);
+    }
     camera.lookAt(this.motorcycle.position);
+  }
+
+  respawn(position, direction) {
+    // Update position and rotation
+    this.motorcycle.position.copy(position);
+    this.motorcycle.rotation.y = direction;
+
+    // Clear trail
+    this.clearTrail();
+
+    // Instantly update camera for local player
+    if (this.isLocalPlayer) {
+      this.updateCamera(true); // Pass true for instant camera positioning
+    }
+
+    // Optional: Show a respawn effect
+    this.showRespawnEffect();
+  }
+
+  showRespawnEffect() {
+    // Create a simple respawn effect (a brief glow)
+    const glow = new THREE.Mesh(
+      new THREE.SphereGeometry(2, 16, 16),
+      new THREE.MeshBasicMaterial({
+        color: this.motorcycle.material.color,
+        transparent: true,
+        opacity: 0.7
+      })
+    );
+
+    glow.position.copy(this.motorcycle.position);
+    glow.position.y = 1;
+    scene.add(glow);
+
+    // Animate the glow effect
+    const fadeOut = () => {
+      if (glow.scale.x <= 0.1) {
+        scene.remove(glow);
+        glow.geometry.dispose();
+        glow.material.dispose();
+        return;
+      }
+
+      glow.scale.multiplyScalar(0.9);
+      glow.material.opacity *= 0.9;
+
+      requestAnimationFrame(fadeOut);
+    };
+
+    fadeOut();
   }
 
   remove() {
@@ -337,8 +401,7 @@ function setupSocketHandlers() {
         data.position.z
       );
 
-      otherPlayers[data.id].updatePosition(position, data.direction);
-      otherPlayers[data.id].clearTrail();
+      otherPlayers[data.id].respawn(position, data.direction);
     }
   });
 

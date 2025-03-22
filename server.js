@@ -11,6 +11,7 @@ const GRID_SIZE = 800;
 const ARENA_SIZE = GRID_SIZE / 2;
 const MOVE_SPEED = 1; // Units per frame
 const COLLISION_WIDTH = 0.2; // Trail width for collision detection
+const MAX_TRAIL_LENGTH = 50;
 
 // Game state (server is the authority)
 const gameState = {
@@ -93,6 +94,9 @@ const gameState = {
          player.trail[player.trail.length-1].z !== prevZ)) {
 
       player.trail.push({ x: prevX, z: prevZ });
+      if (player.trail.length > MAX_TRAIL_LENGTH) {
+        player.trail.shift(); // Remove oldest segment
+      }
       newSegment = {
         from: { x: prevX, z: prevZ },
         to: { x: nextX, z: nextZ }
@@ -247,7 +251,7 @@ const gameState = {
 };
 
 // Game loop
-const FPS = 10;
+const FPS = 24;
 const FRAME_TIME = 1000 / FPS;
 let lastUpdateTime = Date.now();
 
