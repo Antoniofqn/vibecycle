@@ -6,7 +6,7 @@ const io = require('socket.io')(server);
 // Serve static files from 'public'
 app.use(express.static('public'));
 
-// Store connected players minimally
+// Store connected players including trails
 const players = {};
 
 io.on('connection', (socket) => {
@@ -16,6 +16,7 @@ io.on('connection', (socket) => {
     players[socket.id] = {
       position: playerData.position,
       color: playerData.color,
+      trail: playerData.trail || [],
     };
     io.emit('updatePlayers', players);
   });
@@ -23,6 +24,7 @@ io.on('connection', (socket) => {
   socket.on('playerMove', (playerData) => {
     if (players[socket.id]) {
       players[socket.id].position = playerData.position;
+      players[socket.id].trail = playerData.trail; // Just store whatever trail the client sends
       io.emit('updatePlayers', players);
     }
   });
@@ -30,6 +32,7 @@ io.on('connection', (socket) => {
   socket.on('playerCollision', (playerData) => {
     if (players[socket.id]) {
       players[socket.id].position = playerData.position;
+      players[socket.id].trail = []; // Clear trail explicitly
       io.emit('updatePlayers', players);
     }
   });
