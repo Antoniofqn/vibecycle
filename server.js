@@ -7,16 +7,123 @@ const io = require('socket.io')(server);
 app.use(express.static('public'));
 
 // Game constants
-const GRID_SIZE = 800;
+const GRID_SIZE = 200;
 const ARENA_SIZE = GRID_SIZE / 2;
 const MOVE_SPEED = 1; // Units per frame
 const COLLISION_WIDTH = 0.2; // Trail width for collision detection
 const MAX_TRAIL_LENGTH = 50;
+const GRID_CELL_SIZE = 10;
 
 // Game state (server is the authority)
 const gameState = {
   players: {},
 
+  // Spatial grid for efficient collision detection
+  spatialGrid: {
+    cells: {}, // Will store segments by cell location
+
+    // Get cell key for a position
+    getCellKey(x, z) {
+      const cellX = Math.floor(x / GRID_CELL_SIZE);
+      const cellZ = Math.floor(z / GRID_CELL_SIZE);
+      return `${cellX},${cellZ}`;
+    },
+
+    // Add a segment to the grid
+    addSegment(segment) {
+      // Register segment in cells along the line from 'from' to 'to'
+      // For best performance, we should register in all cells the line passes through
+      // Here we'll use a simplified approach with just endpoints for clarity
+      const fromKey = this.getCellKey(segment.from.x, segment.from.z);
+      const toKey = this.getCellKey(segment.to.x, segment.to.z);
+
+      // Store which cells this segment is in (for later removal)
+      segment.cells = new Set();
+
+      // Add to 'from' cell
+      if (!this.cells[fromKey]) {
+        this.cells[fromKey] = new Set();
+      }
+      this.cells[fromKey].add(segment);
+      segment.cells.add(fromKey);
+
+      // Add to 'to' cell if different
+      if (fromKey !== toKey) {
+        if (!this.cells[toKey]) {
+          this.cells[toKey] = new Set();
+        }
+        this.cells[toKey].add(segment);
+        segment.cells.add(toKey);
+      }
+
+      // For more accuracy, we would also add to cells along the line
+      // This implementation is simplified for clarity
+    },
+
+    // Remove segment from the grid
+    removeSegment(segment) {
+      if (!segment.cells) return;
+
+      for (const key of segment.cells) {
+        if (this.cells[key]) {
+          this.cells[key].delete(segment);
+
+          // Clean up empty cells
+          if (this.cells[key].size === 0) {
+            delete this.cells[key];
+          }
+        }
+      }
+
+      segment.cells.clear();
+    },
+
+    // Get segments near a position (in current cell and adjacent cells)
+    getNearbySegments(x, z) {
+      const centerX = Math.floor(x / GRID_CELL_SIZE);
+      const centerZ = Math.floor(z / GRID_CELL_SIZE);
+      const segments = new Set();
+
+      // Check 3x3 grid of cells around the position
+      for (let i = -1; i <= 1; i++) {
+        for (let j = -1; j <= 1; j++) {
+          const key = `${centerX + i},${centerZ + j}`;
+          if (this.cells[key]) {
+            for (const segment of this.cells[key]) {
+              segments.add(segment);
+            }
+          }
+        }
+      }
+
+      return segments;
+    },
+
+    // Clear all segments for a player from the grid
+    clearPlayerSegments(playerId) {
+      // For each cell in the grid
+      for (const key in this.cells) {
+        const cell = this.cells[key];
+
+        // Find and remove segments belonging to this player
+        for (const segment of cell) {
+          if (segment.playerId === playerId) {
+            this.removeSegment(segment);
+          }
+        }
+      }
+    },
+
+    // Clear all cells
+    clear() {
+      this.cells = {};
+    }
+  },
+
+  // Store all trail segments separately from player trails
+  segments: [],
+
+  // Add a new player
   addPlayer(id, color) {
     const position = this.findSafePosition();
 
@@ -32,10 +139,19 @@ const gameState = {
     return this.players[id];
   },
 
+  // Remove a player
   removePlayer(id) {
+    // Clear player's segments from the grid
+    this.spatialGrid.clearPlayerSegments(id);
+
+    // Remove player's segments from the array
+    this.segments = this.segments.filter(segment => segment.playerId !== id);
+
+    // Delete the player
     delete this.players[id];
   },
 
+  // Change player direction
   changeDirection(id, turnDirection) {
     const player = this.players[id];
     if (!player || !player.active) return false;
@@ -53,6 +169,31 @@ const gameState = {
     return true;
   },
 
+  // Add trail segment with grid registration
+  addTrailSegment(playerId, fromX, fromZ, toX, toZ) {
+    // Create segment object
+    const segment = {
+      playerId,
+      from: { x: fromX, z: fromZ },
+      to: { x: toX, z: toZ }
+    };
+
+    // Add to segments array
+    this.segments.push(segment);
+
+    // Register segment in spatial grid
+    this.spatialGrid.addSegment(segment);
+
+    // If we exceed maximum segments, remove oldest ones
+    if (this.segments.length > MAX_TRAIL_LENGTH * Object.keys(this.players).length) {
+      const oldestSegment = this.segments.shift();
+      this.spatialGrid.removeSegment(oldestSegment);
+    }
+
+    return segment;
+  },
+
+  // Update player position and trail
   updatePlayer(id) {
     const player = this.players[id];
     if (!player || !player.active) return null;
@@ -67,14 +208,14 @@ const gameState = {
     const nextX = Math.round(prevX + dirX * MOVE_SPEED);
     const nextZ = Math.round(prevZ + dirZ * MOVE_SPEED);
 
-    // Check for collisions
+    // Check for collisions using optimized grid-based collision detection
     if (this.checkCollision(id, nextX, nextZ)) {
       player.active = false;
 
-      // Auto-respawn the player immediately
+      // Auto-respawn the player after a delay
       setTimeout(() => {
         this.respawnPlayer(id);
-      }, 500); // Half-second delay before respawn
+      }, 500);
 
       return {
         id,
@@ -93,10 +234,22 @@ const gameState = {
         (player.trail[player.trail.length-1].x !== prevX ||
          player.trail[player.trail.length-1].z !== prevZ)) {
 
+      // Add to player's trail positions for tracking
       player.trail.push({ x: prevX, z: prevZ });
+
+      // Limit trail length
       if (player.trail.length > MAX_TRAIL_LENGTH) {
-        player.trail.shift(); // Remove oldest segment
+        player.trail.shift();
       }
+
+      // Create actual segment and add to spatial grid
+      newSegment = this.addTrailSegment(
+        id,
+        prevX, prevZ,
+        nextX, nextZ
+      );
+
+      // Create segment object for client
       newSegment = {
         from: { x: prevX, z: prevZ },
         to: { x: nextX, z: nextZ }
@@ -112,6 +265,7 @@ const gameState = {
     };
   },
 
+  // Respawn a player
   respawnPlayer(id) {
     const player = this.players[id];
     if (!player) return null;
@@ -119,7 +273,16 @@ const gameState = {
     const position = this.findSafePosition();
     player.position = { x: position.x, y: 0.25, z: position.z };
     player.direction = 0;
+
+    // Clear player's trail
     player.trail = [];
+
+    // Clear player's segments from the grid
+    this.spatialGrid.clearPlayerSegments(id);
+
+    // Remove player's segments from the array
+    this.segments = this.segments.filter(segment => segment.playerId !== id);
+
     player.active = true;
 
     const result = {
@@ -133,34 +296,45 @@ const gameState = {
     return result;
   },
 
+  // Optimized collision detection using spatial grid
   checkCollision(playerId, x, z) {
     // Check arena boundaries
     if (Math.abs(x) > ARENA_SIZE || Math.abs(z) > ARENA_SIZE) {
       return true;
     }
 
-    // Check collisions with all trails (including own)
-    for (const id in this.players) {
-      // Skip empty trails
-      if (this.players[id].trail.length < 2) continue;
+    // Get segments from nearby grid cells
+    const nearbySegments = this.spatialGrid.getNearbySegments(x, z);
 
-      const trail = this.players[id].trail;
+    // Check collision with each nearby segment
+    for (const segment of nearbySegments) {
+      // Skip very recent segments from the player to prevent self-collisions
+      if (segment.playerId === playerId && this.isRecentSegment(playerId, segment)) {
+        continue;
+      }
 
-      // Check each trail segment
-      for (let i = 1; i < trail.length; i++) {
-        const from = trail[i-1];
-        const to = trail[i];
-
-        // Collision with trail segment
-        if (this.segmentCollision(from, to, x, z)) {
-          return true;
-        }
+      // Check collision
+      if (this.segmentCollision(segment.from, segment.to, x, z)) {
+        return true;
       }
     }
 
     return false;
   },
 
+  // Check if a segment is very recent (to prevent immediate self-collision)
+  isRecentSegment(playerId, segment) {
+    const player = this.players[playerId];
+    if (!player || player.trail.length === 0) return false;
+
+    // Check against the most recent trail position
+    const lastTrailPos = player.trail[player.trail.length - 1];
+
+    // If segment starts at the player's last position, it's recent
+    return (segment.from.x === lastTrailPos.x && segment.from.z === lastTrailPos.z);
+  },
+
+  // Collision detection with a segment
   segmentCollision(from, to, x, z) {
     const halfWidth = COLLISION_WIDTH / 2;
 
@@ -178,6 +352,7 @@ const gameState = {
     return false;
   },
 
+  // Find a safe position for spawning
   findSafePosition() {
     const margin = 5; // Distance from arena boundaries
     let attempts = 0;
@@ -191,6 +366,7 @@ const gameState = {
       let safe = true;
       const safeDistance = 5; // Minimum distance from others
 
+      // Check distance from all players
       for (const id in this.players) {
         const player = this.players[id];
 
@@ -203,20 +379,36 @@ const gameState = {
           safe = false;
           break;
         }
+      }
 
-        // Check distance from trail
-        for (const pos of player.trail) {
-          const dx = pos.x - x;
-          const dz = pos.z - z;
-          const distSquared = dx * dx + dz * dz;
+      // If already unsafe, try again
+      if (!safe) {
+        attempts++;
+        continue;
+      }
 
-          if (distSquared < safeDistance * safeDistance) {
-            safe = false;
-            break;
-          }
+      // Check distance from nearby trail segments using spatial grid
+      const nearbySegments = this.spatialGrid.getNearbySegments(x, z);
+
+      for (const segment of nearbySegments) {
+        // Simple distance check from segment endpoints
+        // For better accuracy, we'd check distance to the line segment
+
+        // Check distance to 'from' endpoint
+        const dx1 = segment.from.x - x;
+        const dz1 = segment.from.z - z;
+        const distSquared1 = dx1 * dx1 + dz1 * dz1;
+
+        // Check distance to 'to' endpoint
+        const dx2 = segment.to.x - x;
+        const dz2 = segment.to.z - z;
+        const distSquared2 = dx2 * dx2 + dz2 * dz2;
+
+        if (distSquared1 < safeDistance * safeDistance ||
+            distSquared2 < safeDistance * safeDistance) {
+          safe = false;
+          break;
         }
-
-        if (!safe) break;
       }
 
       if (safe) {
@@ -233,6 +425,7 @@ const gameState = {
     };
   },
 
+  // Get state for new clients
   getInitialState() {
     const state = {};
     for (const id in this.players) {

@@ -3,7 +3,7 @@ import * as THREE from 'three';
 const socket = io();
 
 // -------------------- Constants & Variables -------------------- //
-const GRID_SIZE = 800;
+const GRID_SIZE = 200;
 const ARENA_SIZE = GRID_SIZE / 2;
 
 // Game state variables
