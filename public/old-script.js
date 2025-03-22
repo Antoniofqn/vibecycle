@@ -1,57 +1,43 @@
-// script.js - Organized structure
-
-// Imports
 import * as THREE from 'three';
-const socket = io();
 
-// -------------------- Constants & Variables -------------------- //
+// Scene Setup
 const scene = new THREE.Scene();
-const camera = new THREE.PerspectiveCamera(
-  75,
-  window.innerWidth / window.innerHeight,
-  0.1,
-  1000
-);
+scene.background = new THREE.Color(0x101010);
+
+// Camera Setup
+const camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 1000);
+
+// Renderer Setup
 const renderer = new THREE.WebGLRenderer({ antialias: true });
-const gridSize = 800;
-const arenaSize = gridSize / 2;
-const otherPlayers = {};
+renderer.setSize(window.innerWidth, window.innerHeight);
+document.body.appendChild(renderer.domElement);
 
-// -------------------- Initialization -------------------- //
-function initScene() {
-  scene.background = new THREE.Color(0x101010);
-  renderer.setSize(window.innerWidth, window.innerHeight);
-  document.body.appendChild(renderer.domElement);
-  window.addEventListener('resize', onResize);
-
-  setupLighting();
-  createArena();
-}
-
-function onResize() {
+// Handle Resize
+window.addEventListener('resize', () => {
   renderer.setSize(window.innerWidth, window.innerHeight);
   camera.aspect = window.innerWidth / window.innerHeight;
   camera.updateProjectionMatrix();
-}
+});
 
-function setupLighting() {
-  scene.add(new THREE.AmbientLight(0xffffff, 0.7));
-  const directionalLight = new THREE.DirectionalLight(0xffffff, 0.8);
-  directionalLight.position.set(10, 20, 5);
-  scene.add(directionalLight);
-}
+// Lighting
+scene.add(new THREE.AmbientLight(0xffffff, 0.7));
+const directionalLight = new THREE.DirectionalLight(0xffffff, 0.8);
+directionalLight.position.set(10, 20, 5);
+scene.add(directionalLight);
 
-function createArena() {
-  const gridHelper = new THREE.GridHelper(
-    gridSize,
-    gridSize,
-    0x444444,
-    0x222222
-  );
-  scene.add(gridHelper);
-}
+// Arena (larger grid)
+const gridSize = 800;
+const gridDivisions = gridSize; // now each square is exactly 1x1 unit
+const gridHelper = new THREE.GridHelper(gridSize, gridDivisions, 0x444444, 0x222222);
+scene.add(gridHelper);
 
-// -------------------- Class Definitions -------------------- //
+// Arena Size
+const arenaSize = gridSize / 2;
+
+// Keep track of other players
+const otherPlayers = {};
+
+// Improved Trail Class with flicker fixes
 class Trail {
   constructor(color, maxLength = 100) {
     this.color = color;
@@ -229,36 +215,39 @@ class Trail {
   }
 }
 
-// -------------------- Player Setup -------------------- //
+// Motorcycle
 const playerColor = new THREE.Color(Math.random(), Math.random(), Math.random());
 const motorcycle = new THREE.Mesh(
   new THREE.BoxGeometry(0.5, 0.5, 1),
   new THREE.MeshStandardMaterial({ color: playerColor })
 );
-motorcycle.position.y = 0.25;
+motorcycle.position.set(0, 0.25, 0);
 scene.add(motorcycle);
 
+// Create player trail
 const playerTrail = new Trail(playerColor);
 scene.add(playerTrail.mesh);
 
-const keys = { left: false, right: false };
+// Movement vars
+let speed = 0.8;
 let directionAngle = 0;
-let lastX, lastZ;
+let moveInterval = 0.1; // Snapping interval
 
-function setupControls() {
-  window.addEventListener('keydown', ({ code }) => {
-    if (code === 'ArrowLeft' || code === 'KeyA') keys.left = true;
-    if (code === 'ArrowRight' || code === 'KeyD') keys.right = true;
-  });
-  window.addEventListener('keyup', ({ code }) => {
-    if (code === 'ArrowLeft' || code === 'KeyA') keys.left = false;
-    if (code === 'ArrowRight' || code === 'KeyD') keys.right = false;
-  });
-}
+// Keyboard input tracking
+const keys = { left: false, right: false };
 
-// -------------------- Collision & Positioning -------------------- //
-// Include checkCollision, segmentCollision, randomSafePosition, positionOccupied
-// ... [Paste these functions unchanged]
+window.addEventListener('keydown', ({ code }) => {
+  if (code === 'ArrowLeft' || code === 'KeyA') keys.left = true;
+  if (code === 'ArrowRight' || code === 'KeyD') keys.right = true;
+});
+
+window.addEventListener('keyup', ({ code }) => {
+  if (code === 'ArrowLeft' || code === 'KeyA') keys.left = false;
+  if (code === 'ArrowRight' || code === 'KeyD') keys.right = false;
+});
+
+// Collision Detection
+// Improved collision check against trail segments
 function checkCollision(x, z) {
   // Check boundaries
   if (Math.abs(x) > arenaSize || Math.abs(z) > arenaSize) {
@@ -284,6 +273,7 @@ function checkCollision(x, z) {
   return false;
 }
 
+// Checks collision with segments instead of points
 function segmentCollision(positions, x, z) {
   const collisionWidth = 0.2; // Trail width, match visual trail width
   const halfWidth = collisionWidth / 2;
@@ -305,6 +295,7 @@ function segmentCollision(positions, x, z) {
   return false;
 }
 
+// safe respawn position
 function randomSafePosition() {
   let position;
   let safe = false;
@@ -321,6 +312,7 @@ function randomSafePosition() {
   return position;
 }
 
+// check if position is occupied by trail
 function positionOccupied(x, z) {
   // Check if position occupied by player trail
   for (const pos of playerTrail.positions) {
@@ -342,8 +334,15 @@ function positionOccupied(x, z) {
   return false;
 }
 
+// Initial spawn
+const initialSpawn = randomSafePosition();
+motorcycle.position.set(initialSpawn.x, 0.25, initialSpawn.z);
 
-// -------------------- Game Logic -------------------- //
+// Last position tracking to prevent duplicate trail segments
+let lastX = motorcycle.position.x;
+let lastZ = motorcycle.position.z;
+
+// Snapped Motorcycle Movement
 function updateMotorcycle() {
   const prevX = motorcycle.position.x;
   const prevZ = motorcycle.position.z;
@@ -416,6 +415,7 @@ function updateMotorcycle() {
   }
 }
 
+// Camera Follow
 function updateCamera() {
   camera.position.lerp(
     new THREE.Vector3(
@@ -428,6 +428,7 @@ function updateCamera() {
   camera.lookAt(motorcycle.position);
 }
 
+// Animation loop
 function animate() {
   requestAnimationFrame(animate);
   updateMotorcycle();
@@ -435,8 +436,10 @@ function animate() {
   renderer.render(scene, camera);
 }
 
-// -------------------- Multiplayer Setup -------------------- //
-// Socket initialization and handling
+// Socket
+const socket = io();
+
+// Initialize player on connect
 socket.emit('newPlayer', {
   position: motorcycle.position,
   color: playerColor.getHex(),
@@ -506,6 +509,7 @@ socket.on('updatePlayers', (players) => {
   }
 });
 
+// Remove other player
 function removeOtherPlayer(id) {
   const player = otherPlayers[id];
   scene.remove(player.motorcycle);
@@ -513,17 +517,4 @@ function removeOtherPlayer(id) {
   delete otherPlayers[id];
 }
 
-// -------------------- Initialization Call -------------------- //
-function startGame() {
-  initScene();
-  setupControls();
-
-  const initialSpawn = randomSafePosition();
-  motorcycle.position.set(initialSpawn.x, 0.25, initialSpawn.z);
-  lastX = motorcycle.position.x;
-  lastZ = motorcycle.position.z;
-
-  animate();
-}
-
-startGame();
+animate();
