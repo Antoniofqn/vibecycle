@@ -369,6 +369,11 @@ function updateMotorcycle() {
   if (checkCollision(nextX, nextZ)) {
     console.log("Collision Detected! Resetting Game.");
 
+    socket.emit('playerCollision', {
+      position: motorcycle.position,
+      trail: [],
+    });
+
     // Clear existing trail
     playerTrail.clear();
 
@@ -382,9 +387,9 @@ function updateMotorcycle() {
     lastX = motorcycle.position.x;
     lastZ = motorcycle.position.z;
 
-    socket.emit('playerCollision', {
+    socket.emit('playerMove', {
       position: motorcycle.position,
-      trail: playerTrail.positions,
+      trail: [], // still empty at spawn
     });
 
     return;
