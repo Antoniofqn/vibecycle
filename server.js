@@ -3,31 +3,26 @@ const app = express();
 const server = require('http').createServer(app);
 const io = require('socket.io')(server);
 
-const MAX_TRAIL_LENGTH = 100;
-
 // Serve static files from 'public'
 app.use(express.static('public'));
 
-// Store connected players
+// Store connected players minimally
 const players = {};
 
 io.on('connection', (socket) => {
   console.log(`Player connected: ${socket.id}`);
 
   socket.on('newPlayer', (playerData) => {
-    players[socket.id] = playerData;
+    players[socket.id] = {
+      position: playerData.position,
+      color: playerData.color,
+    };
     io.emit('updatePlayers', players);
   });
 
   socket.on('playerMove', (playerData) => {
     if (players[socket.id]) {
       players[socket.id].position = playerData.position;
-      players[socket.id].trail.push(playerData.position);
-
-      if (players[socket.id].trail.length > MAX_TRAIL_LENGTH) {
-        players[socket.id].trail.shift(); // remove oldest segment
-      }
-
       io.emit('updatePlayers', players);
     }
   });
@@ -35,7 +30,6 @@ io.on('connection', (socket) => {
   socket.on('playerCollision', (playerData) => {
     if (players[socket.id]) {
       players[socket.id].position = playerData.position;
-      players[socket.id].trail = [];
       io.emit('updatePlayers', players);
     }
   });
