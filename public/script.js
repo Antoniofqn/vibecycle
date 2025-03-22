@@ -49,8 +49,9 @@ window.addEventListener('resize', () => {
 
 // -------------------- Player Class -------------------- //
 class Player {
-  constructor(id, color, position, isLocalPlayer = false) {
+  constructor(id, username, color, position, isLocalPlayer = false) {
     this.id = id;
+    this.username = username;
     this.isLocalPlayer = isLocalPlayer;
 
     // Create motorcycle mesh
@@ -304,6 +305,16 @@ function setupSocketHandlers() {
     socket.emit('joinGame', { color: playerColor.getHex() });
   });
 
+   // Add score board handler
+   socket.on('scoreBoard', (scores) => {
+    updateScoreBoard(scores);
+  });
+
+  // Add score update handler
+  socket.on('scoreUpdate', (data) => {
+    updateScore(data);
+  });
+
   // Receive initial game state
   socket.on('gameState', (state) => {
     // Create all existing players
@@ -317,7 +328,7 @@ function setupSocketHandlers() {
           playerData.position.y,
           playerData.position.z
         );
-        otherPlayers[id] = new Player(id, playerData.color, position, true);
+        otherPlayers[id] = new Player(id, playerData.username, playerData.color, position, true);
       } else {
         // Create other players
         const position = new THREE.Vector3(
@@ -325,7 +336,7 @@ function setupSocketHandlers() {
           playerData.position.y,
           playerData.position.z
         );
-        otherPlayers[id] = new Player(id, playerData.color, position, false);
+        otherPlayers[id] = new Player(id, playerData.username, playerData.color, position, false);
       }
 
       // Add existing trail segments
@@ -350,7 +361,7 @@ function setupSocketHandlers() {
         data.position.y,
         data.position.z
       );
-      otherPlayers[data.id] = new Player(data.id, data.color, position, false);
+      otherPlayers[data.id] = new Player(data.id, data.username, data.color, position, false);
     }
   });
 
@@ -388,7 +399,19 @@ function setupSocketHandlers() {
     if (otherPlayers[data.id]) {
       // Show collision effect
       otherPlayers[data.id].showCollisionEffect();
-      console.log(`Player ${data.id} collided!`);
+      // show kill message if applicable
+      if (data.collidedWith && otherPlayers[data.collidedWith]) {
+        const killer = otherPlayers[data.collidedWith];
+        const victim = otherPlayers[data.id];
+
+        if (data.id === playerId) {
+          // Local player was killed
+          showKillMessage(`You crashed into ${killer.username}'s trail!`);
+        } else {
+          // Other player was killed
+          showKillMessage(`${victim.username} crashed into your trail!`);
+        }
+      }
     }
   });
 
@@ -420,10 +443,145 @@ function animate() {
   renderer.render(scene, camera);
 }
 
+// -------------------- Score Board -------------------- //
+function createScoreboardUI() {
+  const scoreBoard = document.createElement('div');
+  scoreBoard.id = 'scoreboard';
+  scoreBoard.innerHTML = `
+    <h2>Scoreboard</h2>
+    <div id="scores"></div>
+  `;
+
+  // Style the scoreboard
+  scoreBoard.style.position = 'absolute';
+  scoreBoard.style.top = '10px';
+  scoreBoard.style.right = '10px';
+  scoreBoard.style.background = 'rgba(0, 0, 0, 0.7)';
+  scoreBoard.style.color = 'white';
+  scoreBoard.style.padding = '10px';
+  scoreBoard.style.borderRadius = '5px';
+  scoreBoard.style.fontFamily = 'Arial, sans-serif';
+  scoreBoard.style.zIndex = '100';
+  scoreBoard.style.minWidth = '200px';
+
+  document.body.appendChild(scoreBoard);
+
+  // Create message display for kills/deaths
+  const messageDisplay = document.createElement('div');
+  messageDisplay.id = 'message-display';
+
+  // Style the message display
+  messageDisplay.style.position = 'absolute';
+  messageDisplay.style.bottom = '20px';
+  messageDisplay.style.left = '50%';
+  messageDisplay.style.transform = 'translateX(-50%)';
+  messageDisplay.style.background = 'rgba(0, 0, 0, 0.7)';
+  messageDisplay.style.color = 'white';
+  messageDisplay.style.padding = '10px 20px';
+  messageDisplay.style.borderRadius = '5px';
+  messageDisplay.style.fontFamily = 'Arial, sans-serif';
+  messageDisplay.style.zIndex = '100';
+  messageDisplay.style.opacity = '0';
+  messageDisplay.style.transition = 'opacity 0.3s ease-in-out';
+
+  document.body.appendChild(messageDisplay);
+}
+
+// Update the scoreboard
+function updateScoreBoard(scores) {
+  const scoresDiv = document.getElementById('scores');
+  if (!scoresDiv) return;
+
+  // Sort by score
+  scores.sort((a, b) => b.score - a.score);
+
+  // Generate HTML
+  let html = '';
+  scores.forEach(player => {
+    const isYou = player.id === playerId;
+    const colorHex = '#' + player.color.toString(16).padStart(6, '0');
+
+    html += `
+      <div class="score-row ${isYou ? 'your-score' : ''}">
+        <span class="player-color" style="background-color: ${colorHex}"></span>
+        <span class="player-name">${player.username}${isYou ? ' (You)' : ''}</span>
+        <span class="player-score">${player.score}</span>
+      </div>
+    `;
+  });
+
+  scoresDiv.innerHTML = html;
+
+  // Add styles for score rows
+  const style = document.createElement('style');
+  style.textContent = `
+    .score-row {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      padding: 5px 0;
+      border-bottom: 1px solid rgba(255, 255, 255, 0.2);
+    }
+    .your-score {
+      font-weight: bold;
+      background-color: rgba(255, 255, 255, 0.1);
+    }
+    .player-color {
+      display: inline-block;
+      width: 10px;
+      height: 10px;
+      border-radius: 50%;
+      margin-right: 5px;
+    }
+    .player-name {
+      flex-grow: 1;
+      margin-right: 10px;
+    }
+  `;
+  document.head.appendChild(style);
+}
+
+// Update a single player's score
+function updateScore(data) {
+  // Get the current scores
+  const scoresDiv = document.getElementById('scores');
+  if (!scoresDiv) return;
+
+  // Create array of current scores
+  const scores = [];
+  for (const id in otherPlayers) {
+    const player = otherPlayers[id];
+    scores.push({
+      id: player.id,
+      username: player.username,
+      score: id === data.id ? data.score : (player.score || 0),
+      color: player.motorcycle.material.color.getHex()
+    });
+  }
+
+  // Update the scoreboard
+  updateScoreBoard(scores);
+}
+
+// Show kill/death message
+function showKillMessage(message) {
+  const messageDisplay = document.getElementById('message-display');
+  if (!messageDisplay) return;
+
+  messageDisplay.textContent = message;
+  messageDisplay.style.opacity = '1';
+
+  // Hide after 3 seconds
+  setTimeout(() => {
+    messageDisplay.style.opacity = '0';
+  }, 3000);
+}
+
 // -------------------- Initialize Game -------------------- //
 function initGame() {
   setupControls();
   setupSocketHandlers();
+  createScoreboardUI();
   animate();
 }
 

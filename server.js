@@ -13,10 +13,33 @@ const MOVE_SPEED = 1; // Units per frame
 const COLLISION_WIDTH = 0.2; // Trail width for collision detection
 const MAX_TRAIL_LENGTH = 50;
 const GRID_CELL_SIZE = 10;
+const adjectives = [
+  "Swift", "Brave", "Mighty", "Clever", "Fierce", "Agile", "Nimble", "Daring",
+  "Rapid", "Sleek", "Crafty", "Bold", "Sharp", "Quick", "Smooth", "Vibrant",
+  "Witty", "Deft", "Wild", "Keen"
+];
+
+const nouns = [
+  "Rider", "Racer", "Pilot", "Driver", "Biker", "Runner", "Sprinter", "Chaser",
+  "Cruiser", "Drifter", "Glider", "Speeder", "Blazer", "Zoomer", "Voyager",
+  "Streak", "Flash", "Bolt", "Rocket", "Arrow"
+];
+
+// Generate a random username
+function generateUsername() {
+  const adjective = adjectives[Math.floor(Math.random() * adjectives.length)];
+  const noun = nouns[Math.floor(Math.random() * nouns.length)];
+  return `${adjective}-${noun}`;
+}
 
 // Game state (server is the authority)
 const gameState = {
   players: {},
+  // Store all trail segments separately from player trails
+  segments: [],
+
+  // Add this to track which segments belong to which player
+  segmentOwners: new Map(),
 
   // Spatial grid for efficient collision detection
   spatialGrid: {
@@ -120,20 +143,19 @@ const gameState = {
     }
   },
 
-  // Store all trail segments separately from player trails
-  segments: [],
-
   // Add a new player
   addPlayer(id, color) {
     const position = this.findSafePosition();
 
     this.players[id] = {
       id,
+      username: generateUsername(),
       position: { x: position.x, y: 0.25, z: position.z },
       color,
       direction: 0, // Initial direction (0 = North, in radians)
       trail: [],
-      active: true
+      active: true,
+      score: 0
     };
 
     return this.players[id];
@@ -184,10 +206,14 @@ const gameState = {
     // Register segment in spatial grid
     this.spatialGrid.addSegment(segment);
 
+    // Store ownership for scoring
+    this.segmentOwners.set(segment, playerId);
+
     // If we exceed maximum segments, remove oldest ones
     if (this.segments.length > MAX_TRAIL_LENGTH * Object.keys(this.players).length) {
       const oldestSegment = this.segments.shift();
       this.spatialGrid.removeSegment(oldestSegment);
+      this.segmentOwners.delete(oldestSegment);
     }
 
     return segment;
@@ -208,9 +234,30 @@ const gameState = {
     const nextX = Math.round(prevX + dirX * MOVE_SPEED);
     const nextZ = Math.round(prevZ + dirZ * MOVE_SPEED);
 
+     // Check for collisions using optimized grid-based collision detection
+     const collisionResult = this.checkCollision(id, nextX, nextZ);
+
     // Check for collisions using optimized grid-based collision detection
-    if (this.checkCollision(id, nextX, nextZ)) {
+    if (collisionResult.collision) {
       player.active = false;
+
+      // Award points to the owner of the segment that caused the collision
+      // Only if it's not a suicide (boundary or self-collision)
+      const collidedWithPlayerId = collisionResult.collidedWith;
+
+      if (collidedWithPlayerId && collidedWithPlayerId !== id) {
+        const scorer = this.players[collidedWithPlayerId];
+        if (scorer) {
+          scorer.score += 1;
+
+          // Broadcast the score update
+          io.emit('scoreUpdate', {
+            id: collidedWithPlayerId,
+            username: scorer.username,
+            score: scorer.score
+          });
+        }
+      }
 
       // Auto-respawn the player after a delay
       setTimeout(() => {
@@ -220,7 +267,8 @@ const gameState = {
       return {
         id,
         status: 'collision',
-        position: { x: prevX, y: player.position.y, z: prevZ }
+        position: { x: prevX, y: player.position.y, z: prevZ },
+        collidedWith: collidedWithPlayerId
       };
     }
 
@@ -280,6 +328,13 @@ const gameState = {
     // Clear player's segments from the grid
     this.spatialGrid.clearPlayerSegments(id);
 
+    // Clear ownership for segments
+    for (const [segment, ownerId] of this.segmentOwners.entries()) {
+      if (ownerId === id) {
+        this.segmentOwners.delete(segment);
+      }
+    }
+
     // Remove player's segments from the array
     this.segments = this.segments.filter(segment => segment.playerId !== id);
 
@@ -300,7 +355,7 @@ const gameState = {
   checkCollision(playerId, x, z) {
     // Check arena boundaries
     if (Math.abs(x) > ARENA_SIZE || Math.abs(z) > ARENA_SIZE) {
-      return true;
+      return { collision: true, collidedWith: null };
     }
 
     // Get segments from nearby grid cells
@@ -315,11 +370,11 @@ const gameState = {
 
       // Check collision
       if (this.segmentCollision(segment.from, segment.to, x, z)) {
-        return true;
+        return { collision: true, collidedWith: segment.playerId };
       }
     }
 
-    return false;
+    return { collision: false };
   },
 
   // Check if a segment is very recent (to prevent immediate self-collision)
@@ -432,11 +487,13 @@ const gameState = {
       const player = this.players[id];
       state[id] = {
         id,
+        username: player.username,
         position: { ...player.position },
         color: player.color,
         direction: player.direction,
         trail: [...player.trail],
-        active: player.active
+        active: player.active,
+        score: player.score
       };
     }
     return state;
@@ -490,14 +547,37 @@ io.on('connection', (socket) => {
     // Send initial game state to the new player
     socket.emit('gameState', gameState.getInitialState());
 
+    // Send initial scores to the new player
+    const scores = [];
+    for (const id in gameState.players) {
+      const player = gameState.players[id];
+      scores.push({
+        id,
+        username: player.username,
+        score: player.score,
+        color: player.color
+      });
+    }
+    socket.emit('scoreBoard', scores);
+
     // Notify others about the new player
     socket.broadcast.emit('playerJoined', {
       id: player.id,
+      username: player.username,
       position: player.position,
       color: player.color,
       direction: player.direction,
       trail: player.trail,
-      active: player.active
+      active: player.active,
+      score: player.score
+    });
+
+    // Broadcast the new player to the score board
+    io.emit('scoreUpdate', {
+      id: player.id,
+      username: player.username,
+      score: player.score,
+      color: player.color
     });
   });
 
