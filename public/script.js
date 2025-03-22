@@ -28,13 +28,193 @@ scene.add(directionalLight);
 // Arena (larger grid)
 const gridSize = 800;
 const gridDivisions = gridSize; // now each square is exactly 1x1 unit
-const gridHelper = new THREE.GridHelper(gridSize, 400, 0x444444, 0x222222);
+const gridHelper = new THREE.GridHelper(gridSize, gridDivisions, 0x444444, 0x222222);
 scene.add(gridHelper);
 
 // Arena Size
 const arenaSize = gridSize / 2;
 
-// Motorcycle// Motorcycle
+// Keep track of other players
+const otherPlayers = {};
+
+// Improved Trail Class with flicker fixes
+class Trail {
+  constructor(color, maxLength = 100) {
+    this.color = color;
+    this.maxLength = maxLength;
+    this.positions = [];
+
+    // Using fixed size buffers for stability
+    // Using triangles instead of indexed geometry to avoid flicker during updates
+    this.geometry = new THREE.BufferGeometry();
+
+    // Pre-allocate larger buffers to avoid resizing
+    // Each trail segment is 2 triangles (6 vertices) for each visible face (top, left, right)
+    // 6 vertices per face * 3 faces = 18 vertices per segment
+    // Each vertex has 3 coordinates (x, y, z)
+    this.vertexCount = maxLength * 18;
+    this.vertices = new Float32Array(this.vertexCount * 3);
+
+    // Add colors to make the trail more visible
+    this.colors = new Float32Array(this.vertexCount * 3);
+    const colorObj = new THREE.Color(this.color);
+
+    // Fill the color buffer with the trail color
+    for (let i = 0; i < this.vertexCount; i++) {
+      this.colors[i * 3] = colorObj.r;
+      this.colors[i * 3 + 1] = colorObj.g;
+      this.colors[i * 3 + 2] = colorObj.b;
+    }
+
+    // Setup buffers
+    this.geometry.setAttribute('position', new THREE.BufferAttribute(this.vertices, 3));
+    this.geometry.setAttribute('color', new THREE.BufferAttribute(this.colors, 3));
+
+    // Create a single material with vertex colors
+    this.material = new THREE.MeshBasicMaterial({
+      vertexColors: true,
+      side: THREE.DoubleSide,
+      transparent: false,
+      opacity: 1.0 // Ensure full opacity
+    });
+
+    // Create a single mesh for the entire trail
+    this.mesh = new THREE.Mesh(this.geometry, this.material);
+    this.mesh.frustumCulled = false; // Prevent disappearing when partially off-screen
+    this.mesh.position.y = 0.25; // Set the height once
+
+    // Trail segment count
+    this.segmentCount = 0;
+
+    // Set draw range to 0 initially
+    this.geometry.setDrawRange(0, 0);
+  }
+
+  addSegment(fromX, fromZ, toX, toZ) {
+    // Store position for collision detection
+    this.positions.push({ x: toX, z: toZ });
+    if (this.positions.length > this.maxLength) {
+      this.positions.shift();
+    }
+
+    // If this is the first segment, initialize previous perpendicular vertices
+    if (this.positions.length === 1) {
+      return;
+    }
+
+    const width = 0.2;
+    const halfWidth = width / 2;
+    const height = 0.5;
+
+    // Calculate direction vector
+    const dirX = toX - fromX;
+    const dirZ = toZ - fromZ;
+    const length = Math.sqrt(dirX * dirX + dirZ * dirZ);
+
+    // Normalize direction
+    const normDirX = dirX / length;
+    const normDirZ = dirZ / length;
+
+    // Calculate perpendicular offset
+    const perpX = -normDirZ * halfWidth;
+    const perpZ = normDirX * halfWidth;
+
+    const segmentIndex = this.segmentCount;
+    const vertexOffset = segmentIndex * 18 * 3;
+
+    const v = this.vertices;
+
+    // If it's the first rendered segment, calculate from offset points
+    if (segmentIndex === 0) {
+      this.prevLeftX = fromX + perpX;
+      this.prevLeftZ = fromZ + perpZ;
+      this.prevRightX = fromX - perpX;
+      this.prevRightZ = fromZ - perpZ;
+    }
+
+    const currLeftX = toX + perpX;
+    const currLeftZ = toZ + perpZ;
+    const currRightX = toX - perpX;
+    const currRightZ = toZ - perpZ;
+
+    // Top Face (2 triangles)
+    // Triangle 1
+    v[vertexOffset + 0] = this.prevLeftX; v[vertexOffset + 1] = height; v[vertexOffset + 2] = this.prevLeftZ;
+    v[vertexOffset + 3] = currLeftX; v[vertexOffset + 4] = height; v[vertexOffset + 5] = currLeftZ;
+    v[vertexOffset + 6] = currRightX; v[vertexOffset + 7] = height; v[vertexOffset + 8] = currRightZ;
+
+    // Triangle 2
+    v[vertexOffset + 9] = this.prevLeftX; v[vertexOffset + 10] = height; v[vertexOffset + 11] = this.prevLeftZ;
+    v[vertexOffset + 12] = currRightX; v[vertexOffset + 13] = height; v[vertexOffset + 14] = currRightZ;
+    v[vertexOffset + 15] = this.prevRightX; v[vertexOffset + 16] = height; v[vertexOffset + 17] = this.prevRightZ;
+
+    // Left Side Face (2 triangles)
+    // Triangle 1
+    v[vertexOffset + 18] = this.prevLeftX; v[vertexOffset + 19] = height; v[vertexOffset + 20] = this.prevLeftZ;
+    v[vertexOffset + 21] = this.prevLeftX; v[vertexOffset + 22] = 0; v[vertexOffset + 23] = this.prevLeftZ;
+    v[vertexOffset + 24] = currLeftX; v[vertexOffset + 25] = height; v[vertexOffset + 26] = currLeftZ;
+
+    // Triangle 2
+    v[vertexOffset + 27] = currLeftX; v[vertexOffset + 28] = height; v[vertexOffset + 29] = currLeftZ;
+    v[vertexOffset + 30] = this.prevLeftX; v[vertexOffset + 31] = 0; v[vertexOffset + 32] = this.prevLeftZ;
+    v[vertexOffset + 33] = currLeftX; v[vertexOffset + 34] = 0; v[vertexOffset + 35] = currLeftZ;
+
+    // Right Side Face (2 triangles)
+    // Triangle 1
+    v[vertexOffset + 36] = this.prevRightX; v[vertexOffset + 37] = height; v[vertexOffset + 38] = this.prevRightZ;
+    v[vertexOffset + 39] = currRightX; v[vertexOffset + 40] = height; v[vertexOffset + 41] = currRightZ;
+    v[vertexOffset + 42] = this.prevRightX; v[vertexOffset + 43] = 0; v[vertexOffset + 44] = this.prevRightZ;
+
+    // Triangle 2
+    v[vertexOffset + 45] = currRightX; v[vertexOffset + 46] = height; v[vertexOffset + 47] = currRightZ;
+    v[vertexOffset + 48] = currRightX; v[vertexOffset + 49] = 0; v[vertexOffset + 50] = currRightZ;
+    v[vertexOffset + 51] = this.prevRightX; v[vertexOffset + 52] = 0; v[vertexOffset + 53] = this.prevRightZ;
+
+    // Update previous vertices for next segment
+    this.prevLeftX = currLeftX;
+    this.prevLeftZ = currLeftZ;
+    this.prevRightX = currRightX;
+    this.prevRightZ = currRightZ;
+
+    // Update geometry
+    this.geometry.attributes.position.needsUpdate = true;
+    this.segmentCount++;
+    this.geometry.setDrawRange(0, this.segmentCount * 18);
+
+    if (this.segmentCount >= this.maxLength - 1) {
+      this.shiftGeometry();
+    }
+  }
+
+  shiftGeometry() {
+    // Instead of resetting, shift the geometry back to make room for new segments
+    // This prevents the "flicker" that occurs when resetting the entire buffer
+
+    // Keep most recent segments and discard oldest
+    const verticesToKeep = (this.maxLength - 10) * 18 * 3; // Keep all but 10 oldest segments
+    const newOffset = 10 * 18 * 3; // Discard 10 oldest segments
+
+    // Shift the vertices in the buffer
+    for (let i = 0; i < verticesToKeep; i++) {
+      this.vertices[i] = this.vertices[i + newOffset];
+    }
+
+    // Reduce segment count
+    this.segmentCount -= 10;
+
+    // Update geometry
+    this.geometry.attributes.position.needsUpdate = true;
+    this.geometry.setDrawRange(0, this.segmentCount * 18);
+  }
+
+  clear() {
+    this.positions = [];
+    this.segmentCount = 0;
+    this.geometry.setDrawRange(0, 0);
+  }
+}
+
+// Motorcycle
 const playerColor = new THREE.Color(Math.random(), Math.random(), Math.random());
 const motorcycle = new THREE.Mesh(
   new THREE.BoxGeometry(0.5, 0.5, 1),
@@ -43,19 +223,9 @@ const motorcycle = new THREE.Mesh(
 motorcycle.position.set(0, 0.25, 0);
 scene.add(motorcycle);
 
-
-// Trail variables
-const trailMaterial = new THREE.MeshBasicMaterial({ color: playerColor });
-
-const trailSegments = [];
-const maxTrailLength = 100;
-const trailPositions = [];
-const trailSegmentGeometry = new THREE.BoxGeometry(0.2, 0.5, 1);
-const maxTrailSegments = 100; // adjust as needed
-const trailInstancedMesh = new THREE.InstancedMesh(trailSegmentGeometry, trailMaterial, maxTrailSegments);
-scene.add(trailInstancedMesh);
-let currentTrailIndex = 0;
-
+// Create player trail
+const playerTrail = new Trail(playerColor);
+scene.add(playerTrail.mesh);
 
 // Movement vars
 let speed = 0.8;
@@ -70,7 +240,13 @@ window.addEventListener('keydown', ({ code }) => {
   if (code === 'ArrowRight' || code === 'KeyD') keys.right = true;
 });
 
+window.addEventListener('keyup', ({ code }) => {
+  if (code === 'ArrowLeft' || code === 'KeyA') keys.left = false;
+  if (code === 'ArrowRight' || code === 'KeyD') keys.right = false;
+});
+
 // Collision Detection
+// Improved collision check against trail segments
 function checkCollision(x, z) {
   // Check boundaries
   if (Math.abs(x) > arenaSize || Math.abs(z) > arenaSize) {
@@ -78,25 +254,43 @@ function checkCollision(x, z) {
     return true;
   }
 
-  // Check your own trail positions clearly
-  for (const pos of trailPositions) {
-    if (pos.x === x && pos.z === z) {
-      console.log("Collision with Your Trail!");
+  // Check your own trail segments
+  if (segmentCollision(playerTrail.positions, x, z)) {
+    console.log("Collision with Your Trail!");
+    return true;
+  }
+
+  // Check ALL other players' trail segments
+  for (const id in otherPlayers) {
+    const player = otherPlayers[id];
+    if (segmentCollision(player.trail.positions, x, z)) {
+      console.log("Collision with Another Player's Trail!");
       return true;
     }
   }
 
-  // Check ALL other players' trail positions clearly
-  for (const id in otherPlayers) {
-    const player = otherPlayers[id];
-    for (const pos of player.trailPositions) {
-      if (pos.x === x && pos.z === z) {
-        console.log("Collision with Another Player's Trail!");
-        return true;
-      }
+  return false;
+}
+
+// Checks collision with segments instead of points
+function segmentCollision(positions, x, z) {
+  const collisionWidth = 0.2; // Trail width, match visual trail width
+  const halfWidth = collisionWidth / 2;
+
+  for (let i = 1; i < positions.length; i++) {
+    const from = positions[i - 1];
+    const to = positions[i];
+
+    // Determine bounding box for each segment
+    const minX = Math.min(from.x, to.x) - halfWidth;
+    const maxX = Math.max(from.x, to.x) + halfWidth;
+    const minZ = Math.min(from.z, to.z) - halfWidth;
+    const maxZ = Math.max(from.z, to.z) + halfWidth;
+
+    if (x >= minX && x <= maxX && z >= minZ && z <= maxZ) {
+      return true;
     }
   }
-
   return false;
 }
 
@@ -119,12 +313,33 @@ function randomSafePosition() {
 
 // check if position is occupied by trail
 function positionOccupied(x, z) {
-  return trailPositions.some(pos => pos.x === x && pos.z === z);
+  // Check if position occupied by player trail
+  for (const pos of playerTrail.positions) {
+    if (Math.abs(pos.x - x) < 1 && Math.abs(pos.z - z) < 1) {
+      return true;
+    }
+  }
+
+  // Check if position occupied by other players' trails
+  for (const id in otherPlayers) {
+    const player = otherPlayers[id];
+    for (const pos of player.trail.positions) {
+      if (Math.abs(pos.x - x) < 1 && Math.abs(pos.z - z) < 1) {
+        return true;
+      }
+    }
+  }
+
+  return false;
 }
 
 // Initial spawn
 const initialSpawn = randomSafePosition();
 motorcycle.position.set(initialSpawn.x, 0.25, initialSpawn.z);
+
+// Last position tracking to prevent duplicate trail segments
+let lastX = motorcycle.position.x;
+let lastZ = motorcycle.position.z;
 
 // Snapped Motorcycle Movement
 function updateMotorcycle() {
@@ -152,13 +367,8 @@ function updateMotorcycle() {
   if (checkCollision(nextX, nextZ)) {
     console.log("Collision Detected! Resetting Game.");
 
-    // Clear existing trails visually
-    trailPositions.length = 0;
-    for (let i = 0; i < maxTrailSegments; i++) {
-      trailInstancedMesh.setMatrixAt(i, new THREE.Matrix4().setPosition(0, -1000, 0)); // move off-screen
-    }
-    trailInstancedMesh.instanceMatrix.needsUpdate = true;
-    currentTrailIndex = 0;
+    // Clear existing trail
+    playerTrail.clear();
 
     // Reset motorcycle
     const newSpawn = randomSafePosition();
@@ -166,9 +376,13 @@ function updateMotorcycle() {
     motorcycle.rotation.y = 0;
     directionAngle = 0;
 
+    // Update last positions
+    lastX = motorcycle.position.x;
+    lastZ = motorcycle.position.z;
+
     socket.emit('playerCollision', {
       position: motorcycle.position,
-      trail: trailPositions,
+      trail: playerTrail.positions,
     });
 
     return;
@@ -185,41 +399,19 @@ function updateMotorcycle() {
   motorcycle.position.x = Math.round(motorcycle.position.x);
   motorcycle.position.z = Math.round(motorcycle.position.z);
 
-  const matrix = new THREE.Matrix4();
-  const fromX = prevX;
-  const fromZ = prevZ;
-  const toX = motorcycle.position.x;
-  const toZ = motorcycle.position.z;
-  const distance = Math.sqrt((toX - fromX) ** 2 + (toZ - fromZ) ** 2);
+  // Only add trail segment if we've actually moved
+  if (prevX !== lastX || prevZ !== lastZ) {
+    playerTrail.addSegment(prevX, prevZ, motorcycle.position.x, motorcycle.position.z);
 
-  // Midpoint for position
-  const midX = (fromX + toX) / 2;
-  const midZ = (fromZ + toZ) / 2;
+    // Update last position
+    lastX = motorcycle.position.x;
+    lastZ = motorcycle.position.z;
 
-  const position = new THREE.Vector3(midX, 0.25, midZ);
-  const quaternion = new THREE.Quaternion();
-  const scale = new THREE.Vector3(1, 1, distance);
-
-  const lookAtTarget = new THREE.Vector3(toX, 0.25, toZ);
-  const direction = lookAtTarget.clone().sub(position).normalize();
-  quaternion.setFromUnitVectors(new THREE.Vector3(0, 0, 1), direction);
-
-  // set matrix for instanced mesh
-  matrix.compose(position, quaternion, scale);
-  trailInstancedMesh.setMatrixAt(currentTrailIndex % maxTrailSegments, matrix);
-  trailInstancedMesh.instanceMatrix.needsUpdate = true;
-  currentTrailIndex++;
-
-  // Manage trail positions for collision
-  trailPositions.push({ x: motorcycle.position.x, z: motorcycle.position.z });
-  if (trailPositions.length > maxTrailSegments) {
-    trailPositions.shift();
+    socket.emit('playerMove', {
+      position: motorcycle.position,
+      trail: playerTrail.positions,
+    });
   }
-
-  socket.emit('playerMove', {
-    position: motorcycle.position,
-    trail: trailPositions,
-  });
 }
 
 // Camera Follow
@@ -253,9 +445,6 @@ socket.emit('newPlayer', {
   trail: [],
 });
 
-// Keep track of other players
-const otherPlayers = {};
-
 socket.on('updatePlayers', (players) => {
   for (const id in players) {
     if (id === socket.id) continue;
@@ -269,19 +458,46 @@ socket.on('updatePlayers', (players) => {
       );
       scene.add(otherMotorcycle);
 
+      const otherTrail = new Trail(data.color);
+      scene.add(otherTrail.mesh);
+
       otherPlayers[id] = {
         motorcycle: otherMotorcycle,
-        trailSegments: [],
-        color: data.color,
-        trailPositions: []
+        trail: otherTrail,
+        lastPos: { x: data.position.x, z: data.position.z }
       };
     }
 
     const player = otherPlayers[id];
     player.motorcycle.position.set(data.position.x, data.position.y, data.position.z);
-    player.trailPositions = data.trail; // clearly store positions
 
-    updateOtherPlayerTrails(player);
+    // Update other player trail
+    if (data.trail && data.trail.length > 0) {
+      // Only process if we have new trail positions
+      const lastReceivedPos = data.trail[data.trail.length - 1];
+
+      // Check if we have a new position to add
+      if (player.lastPos.x !== lastReceivedPos.x || player.lastPos.z !== lastReceivedPos.z) {
+        // Find the starting point - go backwards from the end to find where we left off
+        let startIdx = 0;
+        for (let i = data.trail.length - 1; i > 0; i--) {
+          if (data.trail[i].x === player.lastPos.x && data.trail[i].z === player.lastPos.z) {
+            startIdx = i;
+            break;
+          }
+        }
+
+        // Add new segments
+        for (let i = startIdx; i < data.trail.length - 1; i++) {
+          const from = data.trail[i];
+          const to = data.trail[i + 1];
+          player.trail.addSegment(from.x, from.z, to.x, to.z);
+        }
+
+        // Update last position
+        player.lastPos = { ...lastReceivedPos };
+      }
+    }
   }
 
   // Remove disconnected players
@@ -292,60 +508,11 @@ socket.on('updatePlayers', (players) => {
   }
 });
 
-// Helper functions
-// Optimized handling for other players' trails using InstancedMesh
-function updateOtherPlayerTrails(player) {
-  const maxSegments = 100;
-
-  // Initialize instanced mesh if not yet created for this player
-  if (!player.trailInstancedMesh) {
-    const geometry = new THREE.BoxGeometry(0.2, 0.5, 1);
-    const material = new THREE.MeshBasicMaterial({ color: player.color });
-
-    player.trailInstancedMesh = new THREE.InstancedMesh(geometry, material, maxSegments);
-    player.currentTrailIndex = 0;
-    scene.add(player.trailInstancedMesh);
-  }
-
-  const positions = player.trailPositions;
-
-  for (let i = 1; i < positions.length && i < maxSegments; i++) {
-    const from = positions[i - 1];
-    const to = positions[i];
-
-    const distance = Math.sqrt((to.x - from.x) ** 2 + (to.z - from.z) ** 2);
-    const midX = (from.x + to.x) / 2;
-    const midZ = (from.z + to.z) / 2;
-
-    const position = new THREE.Vector3(midX, 0.25, midZ);
-    const scale = new THREE.Vector3(1, 1, distance);
-    const quaternion = new THREE.Quaternion();
-
-    const direction = new THREE.Vector3(to.x - from.x, 0, to.z - from.z).normalize();
-    quaternion.setFromUnitVectors(new THREE.Vector3(0, 0, 1), direction);
-
-    const matrix = new THREE.Matrix4();
-    matrix.compose(position, quaternion, scale);
-
-    player.trailInstancedMesh.setMatrixAt((player.currentTrailIndex + i) % maxSegments, matrix);
-  }
-
-  // Clear unused instances (hide them below arena)
-  for (let i = positions.length; i < maxSegments; i++) {
-    const offscreenMatrix = new THREE.Matrix4().setPosition(0, -1000, 0);
-    player.trailInstancedMesh.setMatrixAt((player.currentTrailIndex + i) % maxSegments, offscreenMatrix);
-  }
-
-  player.trailInstancedMesh.instanceMatrix.needsUpdate = true;
-}
-
-
+// Remove other player
 function removeOtherPlayer(id) {
   const player = otherPlayers[id];
   scene.remove(player.motorcycle);
-  if (player.trailInstancedMesh) {
-    scene.remove(player.trailInstancedMesh);
-  }
+  scene.remove(player.trail.mesh);
   delete otherPlayers[id];
 }
 
