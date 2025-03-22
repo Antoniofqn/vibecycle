@@ -851,6 +851,73 @@ function updateScore(data) {
   updateScoreBoard(scores);
 }
 
+// -------------------- Vaporwave Scene -------------------- //
+function applySimpleVaporwaveStyle() {
+
+
+  // 1. Change scene background color to a gradient by using a full-page div
+  const backgroundDiv = document.createElement('div');
+  backgroundDiv.style.position = 'fixed';
+  backgroundDiv.style.top = '0';
+  backgroundDiv.style.left = '0';
+  backgroundDiv.style.width = '100%';
+  backgroundDiv.style.height = '100%';
+  backgroundDiv.style.background = 'linear-gradient(to bottom, #4a0094 0%, #ff0084 70%, #ff9c00 100%)';
+  backgroundDiv.style.zIndex = '-100';
+  document.body.appendChild(backgroundDiv);
+
+  // 2. Set scene.background to black so the gradient shows through
+  scene.background = new THREE.Color(0x000000);
+
+  // 3. Change grid colors to neon
+  if (gridHelper) {
+    scene.remove(gridHelper);
+  }
+
+  // Create new grid with neon colors
+  const newGridHelper = new THREE.GridHelper(GRID_SIZE, GRID_SIZE, 0x00ffff, 0xCC00CC);
+  scene.add(newGridHelper);
+
+  // 4. Add title at the top
+  const titleDiv = document.createElement('div');
+  titleDiv.textContent = 'VibeCycle';
+  titleDiv.style.position = 'absolute';
+  titleDiv.style.top = '10px';
+  titleDiv.style.left = '50%';
+  titleDiv.style.transform = 'translateX(-50%)';
+  titleDiv.style.color = '#ffffff';
+  titleDiv.style.fontSize = '36px';
+  titleDiv.style.fontWeight = 'bold';
+  titleDiv.style.fontFamily = 'Arial, sans-serif';
+  titleDiv.style.textShadow = '0 0 10px #ff00ff, 0 0 20px #ff00ff';
+  titleDiv.style.zIndex = '100';
+  document.body.appendChild(titleDiv);
+
+  // 5. Style the scoreboard
+  const scoreboard = document.getElementById('scoreboard');
+  if (scoreboard) {
+    scoreboard.style.background = 'rgba(0, 0, 0, 0.7)';
+    scoreboard.style.border = '2px solid #00ffff';
+    scoreboard.style.boxShadow = '0 0 10px #00ffff';
+
+    // Find the scoreboard title and style it
+    const scoreboardTitle = scoreboard.querySelector('h2');
+    if (scoreboardTitle) {
+      scoreboardTitle.style.color = '#00ffff';
+      scoreboardTitle.style.textShadow = '0 0 5px #00ffff';
+      scoreboardTitle.style.textAlign = 'center';
+    }
+  }
+
+  // 6. Add improved lighting for neon effect
+  const ambientLight = new THREE.AmbientLight(0x9966ff, 0.7);
+  scene.add(ambientLight);
+
+  const directionalLight = new THREE.DirectionalLight(0xff00ff, 0.8);
+  directionalLight.position.set(10, 20, 5);
+  scene.add(directionalLight);
+}
+
 // -------------------- Initialize Game -------------------- //
 function initGame() {
   setupControls();
@@ -858,6 +925,7 @@ function initGame() {
   createScoreboardUI();
   setupMobileUI();
   animate();
+  applySimpleVaporwaveStyle();
 }
 
 // Start the game
