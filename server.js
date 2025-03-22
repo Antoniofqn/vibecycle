@@ -254,7 +254,8 @@ const gameState = {
           io.emit('scoreUpdate', {
             id: collidedWithPlayerId,
             username: scorer.username,
-            score: scorer.score
+            score: scorer.score,
+            color: scorer.color
           });
         }
       }
@@ -594,8 +595,15 @@ io.on('connection', (socket) => {
   });
 
   socket.on('disconnect', () => {
-    gameState.removePlayer(socket.id);
-    io.emit('playerLeft', { id: socket.id });
+    const player = gameState.players[socket.id];
+    if (player) {
+      const username = player.username;
+      gameState.removePlayer(socket.id);
+
+      // Notify others about the player's departure
+      io.emit('playerLeft', { id: socket.id, username });
+    }
+
     console.log(`Player disconnected: ${socket.id}`);
   });
 });

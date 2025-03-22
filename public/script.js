@@ -10,6 +10,7 @@ const ARENA_SIZE = GRID_SIZE / 2;
 let playerId = null;
 let playerColor = new THREE.Color(Math.random(), Math.random(), Math.random());
 const otherPlayers = {};
+const playerScores = {};
 
 // Input handling
 const keys = { left: false, right: false };
@@ -307,12 +308,30 @@ function setupSocketHandlers() {
 
    // Add score board handler
    socket.on('scoreBoard', (scores) => {
-    updateScoreBoard(scores);
+    // Store initial scores
+    scores.forEach(player => {
+      playerScores[player.id] = {
+        username: player.username,
+        score: player.score,
+        color: player.color
+      };
+    });
+    updateScoreBoard();
   });
 
   // Add score update handler
   socket.on('scoreUpdate', (data) => {
-    updateScore(data);
+    // Update just this player's score
+    if (playerScores[data.id]) {
+      playerScores[data.id].score = data.score;
+    } else {
+      playerScores[data.id] = {
+        username: data.username,
+        score: data.score,
+        color: data.color
+      };
+    }
+    updateScoreBoard();
   });
 
   // Receive initial game state
@@ -320,6 +339,13 @@ function setupSocketHandlers() {
     // Create all existing players
     for (const id in state) {
       const playerData = state[id];
+
+      // Store score information
+      playerScores[id] = {
+        username: playerData.username,
+        score: playerData.score,
+        color: playerData.color
+      };
 
       if (id === playerId) {
         // Create local player
@@ -351,6 +377,8 @@ function setupSocketHandlers() {
         }
       }
     }
+    // Update the scoreboard
+    updateScoreBoard();
   });
 
   // Player joined
@@ -362,6 +390,14 @@ function setupSocketHandlers() {
         data.position.z
       );
       otherPlayers[data.id] = new Player(data.id, data.username, data.color, position, false);
+      // Store score information
+      playerScores[data.id] = {
+        username: data.username,
+        score: 0,
+        color: data.color
+      };
+      // Update the scoreboard
+      updateScoreBoard();
     }
   });
 
@@ -400,16 +436,24 @@ function setupSocketHandlers() {
       // Show collision effect
       otherPlayers[data.id].showCollisionEffect();
       // show kill message if applicable
-      if (data.collidedWith && otherPlayers[data.collidedWith]) {
-        const killer = otherPlayers[data.collidedWith];
-        const victim = otherPlayers[data.id];
+      // Show kill message if applicable
+      if (data.collidedWith) {
+        const killerUsername = playerScores[data.collidedWith] ?
+                              playerScores[data.collidedWith].username : 'Unknown';
+        const victimUsername = playerScores[data.id] ?
+                              playerScores[data.id].username : 'Unknown';
 
         if (data.id === playerId) {
-          // Local player was killed
-          showKillMessage(`You crashed into ${killer.username}'s trail!`);
-        } else {
-          // Other player was killed
-          showKillMessage(`${victim.username} crashed into your trail!`);
+          // You were killed
+          showKillMessage(`You crashed into ${killerUsername}'s trail!`);
+        } else if (data.collidedWith === playerId) {
+          // You killed someone
+          showKillMessage(`${victimUsername} crashed into your trail!`);
+        }
+      } else {
+        // Boundary collision
+        if (data.id === playerId) {
+          showKillMessage(`Oops!`);
         }
       }
     }
@@ -434,6 +478,9 @@ function setupSocketHandlers() {
       otherPlayers[data.id].remove();
       delete otherPlayers[data.id];
     }
+    // Remove player from scoreboard
+    delete playerScores[data.id];
+    updateScoreBoard();
   });
 }
 
@@ -444,62 +491,140 @@ function animate() {
 }
 
 // -------------------- Score Board -------------------- //
+// Updated createScoreboardUI function with explicit CSS for color squares
 function createScoreboardUI() {
+  // Create and append the style element first to ensure styles are loaded
+  const style = document.createElement('style');
+  style.textContent = `
+    #scoreboard {
+      position: absolute;
+      top: 10px;
+      right: 10px;
+      background: rgba(0, 0, 0, 0.7);
+      color: white;
+      padding: 10px;
+      border-radius: 5px;
+      font-family: Arial, sans-serif;
+      z-index: 100;
+      min-width: 200px;
+    }
+
+    #scoreboard h2 {
+      margin-top: 0;
+      border-bottom: 1px solid rgba(255, 255, 255, 0.3);
+      padding-bottom: 5px;
+    }
+
+    .score-row {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      padding: 5px 0;
+      border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+    }
+
+    .your-score {
+      font-weight: bold;
+      background-color: rgba(255, 255, 255, 0.1);
+    }
+
+    .player-color {
+      display: inline-block;
+      width: 12px;
+      height: 12px;
+      border-radius: 50%;
+      margin-right: 8px;
+      flex-shrink: 0;
+    }
+
+    .player-name {
+      flex-grow: 1;
+      margin-right: 10px;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+
+    .player-score {
+      font-weight: bold;
+    }
+
+    #message-display {
+      position: absolute;
+      bottom: 50px;
+      left: 50%;
+      transform: translateX(-50%);
+      background: rgba(0, 0, 0, 0.8);
+      color: white;
+      padding: 15px 25px;
+      border-radius: 5px;
+      font-family: Arial, sans-serif;
+      z-index: 100;
+      opacity: 0;
+      transition: opacity 0.3s ease-in-out;
+      font-size: 18px;
+      font-weight: bold;
+      text-align: center;
+      min-width: 300px;
+      box-shadow: 0 0 10px rgba(0,0,0,0.5);
+    }
+  `;
+  document.head.appendChild(style);
+
+  // Create scoreboard
   const scoreBoard = document.createElement('div');
   scoreBoard.id = 'scoreboard';
   scoreBoard.innerHTML = `
     <h2>Scoreboard</h2>
     <div id="scores"></div>
   `;
-
-  // Style the scoreboard
-  scoreBoard.style.position = 'absolute';
-  scoreBoard.style.top = '10px';
-  scoreBoard.style.right = '10px';
-  scoreBoard.style.background = 'rgba(0, 0, 0, 0.7)';
-  scoreBoard.style.color = 'white';
-  scoreBoard.style.padding = '10px';
-  scoreBoard.style.borderRadius = '5px';
-  scoreBoard.style.fontFamily = 'Arial, sans-serif';
-  scoreBoard.style.zIndex = '100';
-  scoreBoard.style.minWidth = '200px';
-
   document.body.appendChild(scoreBoard);
 
-  // Create message display for kills/deaths
+  // Create message display
   const messageDisplay = document.createElement('div');
   messageDisplay.id = 'message-display';
-
-  // Style the message display
-  messageDisplay.style.position = 'absolute';
-  messageDisplay.style.bottom = '20px';
-  messageDisplay.style.left = '50%';
-  messageDisplay.style.transform = 'translateX(-50%)';
-  messageDisplay.style.background = 'rgba(0, 0, 0, 0.7)';
-  messageDisplay.style.color = 'white';
-  messageDisplay.style.padding = '10px 20px';
-  messageDisplay.style.borderRadius = '5px';
-  messageDisplay.style.fontFamily = 'Arial, sans-serif';
-  messageDisplay.style.zIndex = '100';
-  messageDisplay.style.opacity = '0';
-  messageDisplay.style.transition = 'opacity 0.3s ease-in-out';
-
+  messageDisplay.textContent = "Game messages will appear here";
   document.body.appendChild(messageDisplay);
+
+  // Show an initial message then fade it
+  setTimeout(() => {
+    messageDisplay.style.opacity = '1';
+    setTimeout(() => {
+      messageDisplay.style.opacity = '0';
+    }, 2000);
+  }, 500);
 }
 
-// Update the scoreboard
-function updateScoreBoard(scores) {
+// Updated scoreboard rendering
+function updateScoreBoard() {
   const scoresDiv = document.getElementById('scores');
   if (!scoresDiv) return;
 
-  // Sort by score
+  // Convert scores object to array for sorting
+  const scores = Object.entries(playerScores).map(([id, data]) => ({
+    id,
+    username: data.username,
+    score: data.score,
+    color: data.color
+  }));
+
+  // Sort by score (descending)
   scores.sort((a, b) => b.score - a.score);
 
   // Generate HTML
   let html = '';
   scores.forEach(player => {
     const isYou = player.id === playerId;
-    const colorHex = '#' + player.color.toString(16).padStart(6, '0');
+     // Handle different color formats (hex string or number)
+     let colorHex;
+     if (typeof player.color === 'number') {
+       colorHex = '#' + player.color.toString(16).padStart(6, '0');
+     } else if (typeof player.color === 'string' && player.color.startsWith('#')) {
+       colorHex = player.color;
+     } else {
+       // Fallback to a default color if no valid color is found
+       colorHex = '#' + Math.floor(Math.random()*16777215).toString(16);
+     }
 
     html += `
       <div class="score-row ${isYou ? 'your-score' : ''}">
@@ -511,34 +636,25 @@ function updateScoreBoard(scores) {
   });
 
   scoresDiv.innerHTML = html;
+}
 
-  // Add styles for score rows
-  const style = document.createElement('style');
-  style.textContent = `
-    .score-row {
-      display: flex;
-      justify-content: space-between;
-      align-items: center;
-      padding: 5px 0;
-      border-bottom: 1px solid rgba(255, 255, 255, 0.2);
-    }
-    .your-score {
-      font-weight: bold;
-      background-color: rgba(255, 255, 255, 0.1);
-    }
-    .player-color {
-      display: inline-block;
-      width: 10px;
-      height: 10px;
-      border-radius: 50%;
-      margin-right: 5px;
-    }
-    .player-name {
-      flex-grow: 1;
-      margin-right: 10px;
-    }
-  `;
-  document.head.appendChild(style);
+// Improved kill message display function
+function showKillMessage(message) {
+  console.log("Kill message:", message); // Debug output
+
+  const messageDisplay = document.getElementById('message-display');
+  if (!messageDisplay) {
+    console.error("Message display element not found!");
+    return;
+  }
+
+  messageDisplay.textContent = message;
+  messageDisplay.style.opacity = '1';
+
+  // Hide after 3 seconds
+  setTimeout(() => {
+    messageDisplay.style.opacity = '0';
+  }, 3000);
 }
 
 // Update a single player's score
@@ -561,20 +677,6 @@ function updateScore(data) {
 
   // Update the scoreboard
   updateScoreBoard(scores);
-}
-
-// Show kill/death message
-function showKillMessage(message) {
-  const messageDisplay = document.getElementById('message-display');
-  if (!messageDisplay) return;
-
-  messageDisplay.textContent = message;
-  messageDisplay.style.opacity = '1';
-
-  // Hide after 3 seconds
-  setTimeout(() => {
-    messageDisplay.style.opacity = '0';
-  }, 3000);
 }
 
 // -------------------- Initialize Game -------------------- //
