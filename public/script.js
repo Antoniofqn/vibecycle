@@ -296,6 +296,178 @@ function setupControls() {
       pendingTurn = 'right';
     }
   });
+
+  setupTouchControls();
+}
+
+function setupTouchControls() {
+  let touchStartX = 0;
+  let touchStartY = 0;
+  let touchEndX = 0;
+  let touchEndY = 0;
+  const minSwipeDistance = 50; // Minimum distance in pixels to register as a swipe
+
+  // Detect touch start position
+  document.addEventListener('touchstart', (event) => {
+    // Store the initial touch position
+    touchStartX = event.changedTouches[0].screenX;
+    touchStartY = event.changedTouches[0].screenY;
+  }, false);
+
+  // Detect touch end and calculate swipe
+  document.addEventListener('touchend', (event) => {
+    // Prevent default behavior to avoid scrolling the page
+    event.preventDefault();
+
+    // Get the final touch position
+    touchEndX = event.changedTouches[0].screenX;
+    touchEndY = event.changedTouches[0].screenY;
+
+    // Calculate swipe direction
+    handleSwipe();
+  }, false);
+
+  // Prevent default for touchmove to avoid page scrolling while playing
+  document.addEventListener('touchmove', (event) => {
+    event.preventDefault();
+  }, { passive: false });
+
+  // Handle the swipe action
+  function handleSwipe() {
+    // Calculate horizontal and vertical distance
+    const deltaX = touchEndX - touchStartX;
+    const deltaY = touchEndY - touchStartY;
+
+    // Only register as a swipe if moved more than minimum distance
+    if (Math.abs(deltaX) < minSwipeDistance && Math.abs(deltaY) < minSwipeDistance) {
+      return; // Not a significant swipe
+    }
+
+    // Determine if the swipe was more horizontal than vertical
+    if (Math.abs(deltaX) > Math.abs(deltaY)) {
+      // Horizontal swipe
+      if (deltaX > 0) {
+        // Swipe right - turn right
+        socket.emit('turnRight');
+        pendingTurn = 'right';
+
+        // Show visual feedback for mobile users
+        showMobileControlfeedback('right');
+      } else {
+        // Swipe left - turn left
+        socket.emit('turnLeft');
+        pendingTurn = 'left';
+
+        // Show visual feedback for mobile users
+        showMobileControlfeedback('left');
+      }
+    }
+  }
+}
+
+// Add visual feedback for mobile controls
+function showMobileControlfeedback(direction) {
+  // Create feedback element if it doesn't exist
+  let feedback = document.getElementById('mobile-control-feedback');
+
+  if (!feedback) {
+    feedback = document.createElement('div');
+    feedback.id = 'mobile-control-feedback';
+
+    // Style the feedback element
+    feedback.style.position = 'absolute';
+    feedback.style.top = '50%';
+    feedback.style.width = '100px';
+    feedback.style.height = '100px';
+    feedback.style.borderRadius = '50%';
+    feedback.style.backgroundColor = 'rgba(255, 255, 255, 0.2)';
+    feedback.style.display = 'flex';
+    feedback.style.justifyContent = 'center';
+    feedback.style.alignItems = 'center';
+    feedback.style.zIndex = '90';
+    feedback.style.transform = 'translateY(-50%)';
+    feedback.style.transition = 'opacity 0.3s ease-out';
+
+    const arrow = document.createElement('div');
+    arrow.style.width = '0';
+    arrow.style.height = '0';
+    arrow.style.borderTop = '20px solid transparent';
+    arrow.style.borderBottom = '20px solid transparent';
+
+    feedback.appendChild(arrow);
+    document.body.appendChild(feedback);
+  }
+
+  // Get the arrow element
+  const arrow = feedback.firstChild;
+
+  // Position and style based on direction
+  if (direction === 'left') {
+    feedback.style.left = '50px';
+    arrow.style.borderRight = '30px solid white';
+    arrow.style.borderLeft = 'none';
+  } else {
+    feedback.style.right = '50px';
+    arrow.style.borderLeft = '30px solid white';
+    arrow.style.borderRight = 'none';
+  }
+
+  // Show feedback
+  feedback.style.opacity = '1';
+
+  // Hide after short delay
+  setTimeout(() => {
+    feedback.style.opacity = '0';
+  }, 300);
+}
+
+// Add mobile device detection
+function isMobileDevice() {
+  return (
+    typeof window.orientation !== 'undefined' ||
+    navigator.userAgent.indexOf('IEMobile') !== -1 ||
+    /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent)
+  );
+}
+
+// Add mobile-specific UI adjustments
+function setupMobileUI() {
+  if (isMobileDevice()) {
+    // Add touch instructions
+    const instructions = document.createElement('div');
+    instructions.id = 'mobile-instructions';
+    instructions.textContent = 'Swipe LEFT or RIGHT to turn';
+
+    // Style instructions
+    instructions.style.position = 'absolute';
+    instructions.style.bottom = '100px';
+    instructions.style.left = '50%';
+    instructions.style.transform = 'translateX(-50%)';
+    instructions.style.backgroundColor = 'rgba(0, 0, 0, 0.7)';
+    instructions.style.color = 'white';
+    instructions.style.padding = '10px 20px';
+    instructions.style.borderRadius = '5px';
+    instructions.style.fontFamily = 'Arial, sans-serif';
+    instructions.style.zIndex = '100';
+
+    document.body.appendChild(instructions);
+
+    // Hide instructions after 5 seconds
+    setTimeout(() => {
+      instructions.style.opacity = '0';
+      instructions.style.transition = 'opacity 1s ease-out';
+    }, 5000);
+
+    // Adjust scoreboard for better mobile viewing
+    const scoreboard = document.getElementById('scoreboard');
+    if (scoreboard) {
+      scoreboard.style.top = '5px';
+      scoreboard.style.right = '5px';
+      scoreboard.style.maxHeight = '30vh';
+      scoreboard.style.overflowY = 'auto';
+      scoreboard.style.fontSize = '14px';
+    }
+  }
 }
 
 // -------------------- Socket Event Handlers -------------------- //
@@ -684,6 +856,7 @@ function initGame() {
   setupControls();
   setupSocketHandlers();
   createScoreboardUI();
+  setupMobileUI();
   animate();
 }
 
