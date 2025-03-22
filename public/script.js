@@ -211,6 +211,7 @@ class Trail {
     this.positions = [];
     this.segmentCount = 0;
     this.geometry.setDrawRange(0, 0);
+    this.geometry.attributes.position.needsUpdate = true;
   }
 }
 
