@@ -3,7 +3,7 @@ const app = express();
 const server = require('http').createServer(app);
 const io = require('socket.io')(server);
 
-const MAX_TRAIL_LENGTH = 20;
+const MAX_TRAIL_LENGTH = 100;
 
 // Serve static files from 'public'
 app.use(express.static('public'));
